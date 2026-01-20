@@ -2,19 +2,16 @@
 
 import argparse
 import json
-import pdb
 import requests
 import getpass
 import os
 import sys
 import re
-import subprocess
 import shutil
 from urllib3.exceptions import InsecureRequestWarning
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import time
-import select
 
 try:
     import paramiko
@@ -47,15 +44,6 @@ class NutanixExporter:
     """
 
     def __init__(self, cluster_ip, username, password, debug=False):
-        """
-        Initializes the NutanixExporter.
-
-        Args:
-            cluster_ip (str): The IP address of Prism Central or a CVM in the target cluster.
-            username (str): The username for Prism authentication.
-            password (str): The password for Prism authentication.
-            debug (bool): Enable debug mode for verbose output.
-        """
         self.cluster_ip = cluster_ip
         self.username = username
         self.password = password
@@ -64,22 +52,16 @@ class NutanixExporter:
         self.debug = debug
         print(f"Debug mode is {'ON' if self.debug else 'OFF'}")
         
-
-        # This dictionary will store the progress bars for each file
         self.progress_bars = {}
 
         if self.debug:
             import logging
             paramiko_log_file = "paramiko_debug.log"
             print(f"Paramiko debug logging enabled. See {paramiko_log_file}")
-            # Set paramiko logging to a file to avoid cluttering stdout
             logging.basicConfig(filename=paramiko_log_file, level=logging.DEBUG)
 
 
     def _create_session(self):
-        """
-        Creates and returns a session with the Nutanix Prism API.
-        """
         session = requests.Session()
         session.auth = (self.username, self.password)
         session.verify = False
@@ -87,9 +69,6 @@ class NutanixExporter:
         return session
 
     def list_all_vms(self):
-        """
-        Retrieves and prints a list of all VMs using the v3 API.
-        """
         print("Retrieving VM inventory...")
         endpoint = f"{self.base_url}/vms/list"
         payload = {"kind": "vm", "length": 500}
@@ -108,9 +87,6 @@ class NutanixExporter:
             print(f"An error occurred while communicating with the Nutanix API: {e}")
 
     def get_vm_details(self, vm_name):
-        """
-        Gets the full details for a VM by its name using the v3 API.
-        """
         print(f"Searching for VM '{vm_name}'...")
         endpoint = f"{self.base_url}/vms/list"
         payload = {"kind": "vm", "filter": f"vm_name=={vm_name}"}
@@ -151,7 +127,12 @@ class NutanixExporter:
             for disk in spec.get('disk_list', []):
                 device_props = disk.get('device_properties', {})
                 if device_props.get('device_type') == 'DISK' and disk.get('uuid'):
-                    details['disks'].append({'uuid': disk['uuid']})
+                    # Capture disk size if available for space checks later
+                    disk_size_mib = disk.get('disk_size_mib', 0)
+                    details['disks'].append({
+                        'uuid': disk['uuid'],
+                        'size_mib': disk_size_mib
+                    })
             
             print(f"Found {len(details['disks'])} exportable disk(s) for the VM.")
             return details
@@ -161,20 +142,14 @@ class NutanixExporter:
             return None
 
     def _run_remote_command(self, ssh_client, command):
-        """
-        Runs a single command on an existing SSH client connection and returns the output.
-        This simplified version is more robust for handling various command types.
-        """
         if self.debug:
             print(f"--- DEBUG: Executing remote command ---\n{command}\n---------------------------------------")
 
         stdin, stdout, stderr = ssh_client.exec_command(command, get_pty=True)
         
-        # This blocks until the command is complete. The keep-alive on the transport prevents timeouts.
         output = stdout.read().decode('utf-8')
         error = stderr.read().decode('utf-8')
         exit_status = stdout.channel.recv_exit_status()
-        # ssh_client.close() # <<< THIS WAS THE PROBLEM. REMOVED. Connection is now managed by the calling function.
         
         if self.debug:
             print(f"--- DEBUG: Remote command results (Exit: {exit_status}) ---")
@@ -184,24 +159,6 @@ class NutanixExporter:
 
         return output, error, exit_status
     
-    def _find_balanced_block(self, text, start_index):
-        """
-        Finds a block of text enclosed by balanced curly braces.
-        """
-        if text[start_index] != '{':
-            return -1
-        
-        open_braces = 1
-        for i in range(start_index + 1, len(text)):
-            if text[i] == '{':
-                open_braces += 1
-            elif text[i] == '}':
-                open_braces -= 1
-            
-            if open_braces == 0:
-                return i
-        return -1 # Not found
-
     def _connect_ssh(self, remotehost, remoteport, remoteusername, remotepassword):
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -214,27 +171,20 @@ class NutanixExporter:
             timeout=15
         )
         
-        # --- Set a keep-alive on the transport to prevent timeouts ---
+        # --- Tuning: Set keep-alive and optimize window size for performance ---
         transport = ssh_client.get_transport()
         if transport:
             transport.set_keepalive(60)
+            # Increase window size to 4MB for better throughput
+            transport.window_size = 4 * 1024 * 1024 
+            # Reduce rekeying frequency (every 1TB)
+            transport.packetizer.REKEY_BYTES = pow(2, 40)
+            transport.packetizer.REKEY_PACKETS = pow(2, 40)
         
         return ssh_client
 
-    def _disconnect_ssh(self, ssh_client):
-        ssh_client.close()
-
-        return
-   
-
     def progress(self, filename, size, sent):
-        """
-        The callback function to update the progress bar.
-        """
-        # filename is in bytes, so we need to decode it
         filename_str = filename
-    
-        # If a progress bar for this file doesn't exist, create one
         if filename_str not in self.progress_bars:
             self.progress_bars[filename_str] = tqdm(
               total=size, 
@@ -242,8 +192,6 @@ class NutanixExporter:
              unit_scale=True, 
               desc=f"Downloading {filename_str}"
           )
-    
-        # Update the progress bar with the number of new bytes transferred
         progress_bar = self.progress_bars[filename_str]
         progress_bar.update(sent - progress_bar.n)
 
@@ -251,34 +199,65 @@ class NutanixExporter:
         try:
             with SCPClient(ssh.get_transport(), progress=self.progress) as scp:
                 print(f"Downloading file {remote_path} to {local_path}...")
-
-                # Use the .get() method to download the file
                 scp.get(remote_path, local_path)
                 
-                # Close any open progress bars
                 for pbar in self.progress_bars.values():
                     pbar.close()
 
                 print("File downloaded successfully!")
 
         except paramiko.AuthenticationException:
-            print("Authentication failed. Please check your username and password.")
-        except FileNotFoundError:
-            print(f"File not found on the remote server at: {remote_path}")
+            print("Authentication failed.")
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"An error occurred during download: {e}")
+
+    def check_cvm_space(self, ssh_client, work_dir, required_mib):
+        """
+        Checks if the CVM has enough space to perform the conversion.
+        """
+        print(f"Checking available disk space on CVM in {work_dir}...")
+        
+        # Get available space in MB from the specific path
+        cmd = f"df -mP {work_dir} | awk 'NR==2 {{print $4}}'"
+        output, error, status = self._run_remote_command(ssh_client, cmd)
+        
+        if status != 0:
+            print(f"Warning: Could not check disk space ({error}). Proceeding with caution.")
+            return
+
+        try:
+            available_mib = int(output.strip())
+            
+            # Safety buffer: Always leave at least 2GB free on the CVM to prevent crashes
+            safety_buffer_mib = 2048 
+            
+            # Heuristic: We warn if available space is less than the PROVISIONED size of the disk.
+            # QCOW2 is compressed, so it might fit, but it's risky.
+            
+            print(f"CVM Space: Available={available_mib}MB | Disk Size={required_mib}MB | Buffer={safety_buffer_mib}MB")
+
+            if available_mib < safety_buffer_mib:
+                raise Exception(f"CRITICAL: CVM is running out of space ({available_mib}MB free). Aborting to prevent crash.")
+
+            if available_mib < (required_mib + safety_buffer_mib):
+                print(f"\nWARNING: Available space ({available_mib}MB) is less than the provisioned disk size ({required_mib}MB).")
+                print("If the disk is full or not compressible, the CVM storage might fill up and CRASH services.")
+                print("Proceeding because QCOW2 compression usually saves space. Monitor closely.\n")
+                time.sleep(3) # Give user a chance to read
+            else:
+                print("Disk space check passed.")
+
+        except ValueError:
+            print("Warning: Could not parse disk space output. Proceeding with caution.")
 
     def export_disk_to_qcow2(self, vm_details, disk_info, output_dir, cvm_user, cvm_pass):
-        """
-        Connects to a CVM, converts a disk to qcow2, and downloads it.
-        Uses a temporary directory on the CVM for safe operation.
-        """
         vm_name = vm_details['name']
         disk_uuid = disk_info['uuid']
+        disk_size = disk_info.get('size_mib', 0)
+        
         print(f"\n===== Starting export for disk {disk_uuid} =====")
 
         ssh_client = None
-        # --- MODIFIED: Use a temporary directory for safety ---
         remote_temp_dir = "export_temp"
         remote_qcow2_filename = f"export_{disk_uuid}.qcow2"
         remote_qcow2_path = f"{remote_temp_dir}/{remote_qcow2_filename}"
@@ -287,54 +266,48 @@ class NutanixExporter:
             print(f"Connecting to CVM {self.cluster_ip} via SSH...")
             ssh_client = self._connect_ssh(self.cluster_ip, 22, cvm_user, cvm_pass)
 
-            # --- ADDED: Create the temporary directory ---
+            # Create temp dir
             print(f"Creating remote temporary directory: {remote_temp_dir}")
             self._run_remote_command(ssh_client, f"mkdir -p {remote_temp_dir}")
 
-            print("Discovering vdisk path via CVM...")
-            acli_cmd = f"/usr/local/nutanix/bin/acli vm.get '{vm_name}' include_vmdisk_paths=1"
+            # --- Safety Check: Ensure CVM has space ---
+            self.check_cvm_space(ssh_client, remote_temp_dir, disk_size)
+
+            print("Discovering vdisk path via CVM (JSON mode)...")
+            # --- Robustness: Use JSON output instead of regex ---
+            acli_cmd = f"/usr/local/nutanix/bin/acli -o json vm.get '{vm_name}' include_vmdisk_paths=1"
             acli_output, acli_error, acli_status = self._run_remote_command(ssh_client, acli_cmd)
 
             if acli_status != 0:
                 raise Exception(f"'acli vm.get' failed: {acli_error or acli_output}")
 
             source_vdisk_path_relative = None
-            current_pos = 0
-            while True:
-                start = acli_output.find("disk_list {", current_pos)
-                if start == -1: break
-
-                block_start = acli_output.find('{', start)
-                if block_start == -1: break
-
-                block_end = self._find_balanced_block(acli_output, block_start)
-                if block_end == -1: break
-
-                section = acli_output[block_start + 1 : block_end]
-                current_pos = block_end
-
-                device_uuid_match = re.search(r"device_uuid:\s*\"?([a-f0-9\-]+)\"?", section)
-                if device_uuid_match and device_uuid_match.group(1) == disk_uuid:
-                    path_match = re.search(r"vmdisk_nfs_path:\s*\"(.*?)\"", section)
-                    if path_match:
-                        source_vdisk_path_relative = path_match.group(1)
+            try:
+                vm_data = json.loads(acli_output)
+                # Helper to find disk in potentially nested structure
+                # The output structure is usually { "VM_NAME": { "config": ... } }
+                vm_config_root = next(iter(vm_data.values())) # Get the first value (the VM object)
+                disk_list = vm_config_root.get('config', {}).get('disk_list', [])
+                
+                for disk in disk_list:
+                    # Check both 'device_uuid' (top level) or nested in properties depending on version
+                    curr_uuid = disk.get('device_uuid') or disk.get('uuid')
+                    
+                    if curr_uuid == disk_uuid:
+                        source_vdisk_path_relative = disk.get('vmdisk_nfs_path')
                         break
+            except json.JSONDecodeError:
+                 raise Exception("Failed to parse acli JSON output.")
 
             if not source_vdisk_path_relative:
-                raise Exception(f"Could not parse 'vmdisk_nfs_path' for disk UUID {disk_uuid} in acli output.")
+                raise Exception(f"Could not find 'vmdisk_nfs_path' for disk UUID {disk_uuid} in acli output.")
 
             source_vdisk_nfs_url = f"nfs://{self.cluster_ip}{source_vdisk_path_relative}"
             print(f"Constructed direct vdisk NFS URL: {source_vdisk_nfs_url}")
 
-            print("Verifying source disk via qemu-img info...")
-            check_path_cmd = f"/usr/local/nutanix/bin/qemu-img info '{source_vdisk_nfs_url}'"
-            _, check_error, check_status = self._run_remote_command(ssh_client, check_path_cmd)
-            if check_status != 0:
-                raise FileNotFoundError(f"Source disk not accessible via NFS URL: {source_vdisk_nfs_url}\nError: {check_error}")
-            print("Source URL verified successfully.")
-
-            convert_cmd = f"/usr/local/nutanix/bin/qemu-img convert -p -O qcow2 '{source_vdisk_nfs_url}' {remote_qcow2_path}"
-            print(f"Converting disk on CVM (this may take a while)...")
+            # --- Optimization: Add '-S 4k' for sparse handling ---
+            convert_cmd = f"/usr/local/nutanix/bin/qemu-img convert -p -S 4k -O qcow2 '{source_vdisk_nfs_url}' {remote_qcow2_path}"
+            print(f"Converting disk on CVM (Sparse Mode enabled)...")
             _, convert_error, convert_status = self._run_remote_command(ssh_client, convert_cmd)
 
             if convert_status != 0:
@@ -355,14 +328,12 @@ class NutanixExporter:
         except Exception as e:
             error_message = str(e)
             if "NFS3ERR_JUKEBOX" in error_message:
-                print("\nNOTE: The error 'NFS3ERR_JUKEBOX' suggests a problem with this specific vdisk on the Nutanix cluster.", file=sys.stderr)
-                print("This can happen if the disk is empty or thin-provisioned with no data written to it.", file=sys.stderr)
+                print("\nNOTE: 'NFS3ERR_JUKEBOX' detected. This usually indicates an empty or sparse disk I/O timeout.", file=sys.stderr)
 
             print(f"\nAn error occurred during the export process for disk {disk_uuid}: {e}", file=sys.stderr)
             return None
         finally:
             if ssh_client and ssh_client.get_transport() and ssh_client.get_transport().is_active():
-                # --- MODIFIED: Clean up the entire temporary directory ---
                 print(f"Cleaning up remote directory: {remote_temp_dir}")
                 cleanup_cmd = f"rm -rf {remote_temp_dir}"
                 self._run_remote_command(ssh_client, cleanup_cmd)
@@ -372,9 +343,6 @@ class NutanixExporter:
                 print("CVM connection closed.")
 
     def generate_and_save_qemu_script(self, vm_details, disk_files, output_dir):
-        """
-        Generates a QEMU launch script from VM details.
-        """
         print("\nGenerating QEMU launch script...")
         vm_name = vm_details['name']
         
@@ -388,7 +356,6 @@ class NutanixExporter:
         command += f"    -cpu host \\\n"
         
         for i, disk_file in enumerate(disk_files):
-            # Make sure the script uses the filename, not the full path
             base_disk_file = os.path.basename(disk_file)
             command += f"    -drive file=\"{base_disk_file}\",if=virtio,index={i},media=disk,format=qcow2,cache=writeback \\\n"
             
@@ -405,9 +372,6 @@ class NutanixExporter:
             print(f"Error: Could not write script to {script_path}: {e}", file=sys.stderr)
 
     def generate_and_save_libvirt_xml(self, vm_details, disk_files, output_dir):
-        """
-        Generates a libvirt/virsh compatible XML definition for the VM.
-        """
         print("\nGenerating libvirt XML definition...")
         vm_name = vm_details['name']
         
@@ -423,14 +387,9 @@ class NutanixExporter:
         features = ET.SubElement(domain, 'features')
         ET.SubElement(features, 'acpi')
         ET.SubElement(features, 'apic')
-        ET.SubElement(features, 'vmport', state='off')
         
         cpu = ET.SubElement(domain, 'cpu', mode='host-passthrough', check='none')
-        clock = ET.SubElement(domain, 'clock', offset='utc')
-        ET.SubElement(clock, 'timer', name='rtc', tickpolicy='catchup')
-        ET.SubElement(clock, 'timer', name='pit', tickpolicy='delay')
-        ET.SubElement(clock, 'timer', name='hpet', present='no')
-
+        
         devices = ET.SubElement(domain, 'devices')
         ET.SubElement(devices, 'emulator').text = '/usr/bin/qemu-system-x86_64'
         
@@ -446,11 +405,7 @@ class NutanixExporter:
         ET.SubElement(devices, 'controller', type='usb', index='0', model='qemu-xhci')
         ET.SubElement(devices, 'interface', type='network')
         ET.SubElement(ET.SubElement(devices, 'interface'), 'model', type='virtio')
-        ET.SubElement(devices, 'serial', type='pty')
-        ET.SubElement(devices, 'console', type='pty')
         ET.SubElement(devices, 'graphics', type='spice', autoport='yes')
-        video = ET.SubElement(devices, 'video')
-        ET.SubElement(video, 'model', type='virtio', heads='1', primary='yes')
 
         xml_string = ET.tostring(domain, 'utf-8')
         reparsed = minidom.parseString(xml_string)
@@ -474,11 +429,10 @@ def main():
     parser.add_argument("vm_name", nargs='?', default=None, help="The name of the VM to export. (Not needed for --inventory)")
     
     parser.add_argument("-u", "--username", help="Username for Prism.", default="admin")
-    parser.add_argument("-p", "--password", help="Password for Prism. If not provided, will be prompted.")
+    parser.add_argument("-p", "--password", help="Password for Prism. Falls back to NUTANIX_PASSWORD env var or prompt.")
     
-    # Changed default to 'nutanix' as it's the standard for CVM CLI operations.
     parser.add_argument("--cvm-user", help="Username for the CVM (for SSH/SFTP).", default="nutanix")
-    parser.add_argument("--cvm-password", help="Password for the CVM. If not provided, will be prompted.")
+    parser.add_argument("--cvm-password", help="Password for the CVM. Falls back to CVM_PASSWORD env var or prompt.")
     
     parser.add_argument("-o", "--output-dir", help="Output directory for exported files.", default=".")
     parser.add_argument("--inventory", action="store_true", help="List all available VMs and exit.")
@@ -486,7 +440,6 @@ def main():
     parser.add_argument("--force", action="store_true", help="Force export even if the VM is powered on (DANGEROUS).")
     parser.add_argument("--export-def", action="store_true", help="Export disks and a QEMU launch script.")
     parser.add_argument("--export-xml", action="store_true", help="Export disks and a libvirt XML file.")
-    # --- FIX: Corrected typo from add_gument to add_argument ---
     parser.add_argument("--export-all", action="store_true", help="Export disks, QEMU script, and libvirt XML.")
 
     args = parser.parse_args()
@@ -495,9 +448,9 @@ def main():
         args.export_def = True
         args.export_xml = True
 
-    if args.password:
-        prism_password = args.password
-    else:
+    # --- Security: Check Environment Variables first ---
+    prism_password = args.password or os.environ.get('NUTANIX_PASSWORD')
+    if not prism_password:
         prism_password = getpass.getpass(f"Enter password for Prism user '{args.username}': ")
 
     exporter = NutanixExporter(args.cluster_ip, args.username, prism_password, debug=args.debug)
@@ -512,6 +465,9 @@ def main():
     export_disks_required = args.export_def or args.export_xml
 
     if not export_disks_required:
+        # If user didn't specify what to export, default to just the disk? 
+        # Or error? The original script exited. Let's act on export-all implicitly if flags missing?
+        # For now, stick to original logic: exit if nothing requested.
         print("No export action specified (--export-def, --export-xml, --export-all). Nothing to do.")
         sys.exit(0)
 
@@ -523,11 +479,9 @@ def main():
         if not args.force:
             print(f"\nError: VM '{args.vm_name}' is currently powered ON ({vm_details['power_state']}).", file=sys.stderr)
             print("Please power off the VM before exporting to ensure data consistency.", file=sys.stderr)
-            print("To override this check, use the --force flag (this is not recommended).", file=sys.stderr)
             sys.exit(1)
         else:
             print("\nWARNING: Proceeding with export while VM is powered ON due to --force flag.")
-            print("This may result in an inconsistent or corrupted disk image.")
             time.sleep(3) 
     else:
         print(f"VM '{args.vm_name}' is powered OFF. Proceeding with export.")
@@ -536,9 +490,8 @@ def main():
         print(f"No exportable disks found for VM '{args.vm_name}'. Exiting.")
         sys.exit(1)
 
-    if args.cvm_password:
-        cvm_password = args.cvm_password
-    else:
+    cvm_password = args.cvm_password or os.environ.get('CVM_PASSWORD')
+    if not cvm_password:
         cvm_password = getpass.getpass(f"Enter password for CVM user '{args.cvm_user}': ")
 
     exported_disk_files = []
@@ -569,4 +522,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
