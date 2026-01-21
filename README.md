@@ -20,7 +20,7 @@ If running this as a nested VM (e.g., inside ESXi or KVM), you must configure th
 * **RAM:** **32GB Minimum** (Highly recommended to allocate more).
   * *Reason:* Nutanix spawns a hidden internal VM (CVM) that consumes 16GB RAM immediately. If the host VM has insufficient RAM, components will crash silently via `oomkill`.
 * **Storage:** 3 Disks (SCSI controller required).
-  * **Size:** Minimum 300GB each (500GB recommended for heavier workloads).
+  * **Size:** Minimum 300GB each (500GB recommended for heavier workloads). The Hypervisor volume can be smaller (32GB). The [official documentation](https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-sysreqs-ce-r.html) says 32GB for Hypervisor, 200GB for CVM and 500GB for storage.
   * **Serial Numbers:** It is **mandatory** to define a SERIAL for the virtual disks in your hypervisor config.
 * **Disk Layout:** The installer creates three volumes:
   1. **CVM:** The Controller VM (Prism management UI).
