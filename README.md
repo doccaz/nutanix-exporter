@@ -41,17 +41,32 @@ If running this as a nested VM (e.g., inside ESXi or KVM), you must configure th
 
 * After the reboot, please wait for the CVM VM to be instantiated, and 15-20min for the storage setup to finish.
 
-* To check if the system was configured properly, run "genesis status" and "cluster status". If the commands do not exist, the installation has failed to complete!
-* The CVM VM can be checked with "virsh list". Its console is available at /var/log/NTNX.serial.0. Check it to troubleshoot potential memory issues.
+* The CVM VM can be checked with "virsh list". Its console is available at /var/log/NTNX.serial.0. Check this log to troubleshoot potential memory issues and see if it booted correctly.
 
-* To create a single node cluster:
+* To check if the system was configured properly, first ssh to the internal CVM IP at 192.168.5.2 (user is "nutanix"). From there, run "genesis status" and "cluster status". If the commands do not exist, the installation has failed to complete (or you tried it too soon). Genesis is responsible for starting all the auxiliary services, like zookeeper, hadoop, prism, cassandra, etc. If it's just showing a couple of services, check the logs at /var/log (especially firstboot* and messages) for issues. Remember that most services will *NOT* show up until you create the cluster.
+
+* It's mandatory to create a cluster. You can also create a single node cluster from the CVM:
 ```
-nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
+nutanix@cvm$ cluster -s <EXTERNAL CVM IP> --redundancy_factor=1 create
 ```
+* There is a long list of services that are configure and started one by one. This could take up to 10 minutes. When it's done, you'll see a list of all the services marked as "UP" and "Success!".
+
+* You can also use the "cluster status" and "genesis status" commands in the CVM to confirm the cluster is up with all the required services.
 
 Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
 
-* The Prism WebUI should be available at https://<CVM IP>:9044. The user is "admin" and the password is "nutanix/4u". Have your Community Portal credentials ready, you'll be asked for them (!).
+* Once the CVM + cluster is up, you must log to the Prism WebUI at https://<CVM IP>:9044. The user is "admin" and the password is "nutanix/4u". You'll be asked to create a new password.
+
+!(nutanix-ahv-install-3.png)
+!(nutanix-ahv-install-4.png)
+
+Have your NEXT Community Portal credentials ready, you'll be asked for them in the next step.
+
+* You should now be able to see the dashboard:
+
+!(nutanix-ahv-install-5.png)
+
+From here on, you can access the main areas via the drop list on the top bar, like "Storage", "VM", "Network", etc.
 
 
 ---
