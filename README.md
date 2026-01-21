@@ -33,9 +33,11 @@ If running this as a nested VM (e.g., inside ESXi or KVM), you must configure th
 
 ![installation settings](nutanix-ahv-install.png)
 
-* The environment is a modified Fedora distribution.
+* The environment is a modified Rocky Linux distribution.
 * Expect Python script errors on screen during installation.
 * There are limited progress indicators. Be patient.
+* To check if the system was configured properly, run "genesis status" and "cluster status". If the commands do not exist, the installation has failed to complete!
+* The CVM VM can be checked with "virsh list". Its console is available at /var/log/NTNX.serial.0. Check it to troubleshoot potential memory issues.
 
 * To create a single node cluster:
 ```
@@ -43,6 +45,7 @@ nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
 ```
 
 Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
+
 
 ---
 
