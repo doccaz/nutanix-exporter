@@ -28,9 +28,21 @@ If running this as a nested VM (e.g., inside ESXi or KVM), you must configure th
   3. **Data Disk:** Proprietary format.
 
 ### 3. The Installation Process
+
+* Recommended settings: 3 separate disks, each will be used for a different role.
+
+![installation settings](nutanix-ahv-install.png)
+
 * The environment is a modified Fedora distribution.
 * Expect Python script errors on screen during installation.
 * There are limited progress indicators. Be patient.
+
+* To create a single node cluster:
+```
+nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
+```
+
+Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
 
 ---
 
@@ -152,12 +164,6 @@ After significant troubleshooting, the following internal behaviors were discove
 # allssh 'sudo faillock --user admin --reset'
 ```
 
-* **To create a single node cluster:**:
-```
-nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
-```
-
-Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
 
 
 ### Internal Component Names (Greek/Sci-Fi Theme)
