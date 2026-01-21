@@ -168,9 +168,6 @@ class NutanixExporter:
             print(f"An error occurred while communicating with the Nutanix API: {e}")
 
     def get_vm_details(self, vm_name, save_raw_json_to=None):
-        """
-        Fetches VM details. Optionally dumps the raw JSON to a folder.
-        """
         print(f"Searching for VM '{vm_name}'...")
         endpoint = f"{self.base_url}/vms/list"
         payload = {"kind": "vm", "filter": f"vm_name=={vm_name}"}
@@ -191,7 +188,7 @@ class NutanixExporter:
             response.raise_for_status()
             vm_details = response.json()
 
-            # --- NEW: Save Raw JSON ---
+            # --- Save Raw JSON for reference ---
             if save_raw_json_to:
                 os.makedirs(save_raw_json_to, exist_ok=True)
                 json_filename = f"{vm_name.replace(' ', '_')}_nutanix.json"
@@ -263,6 +260,7 @@ class NutanixExporter:
         remote_qcow2_path = f"{remote_temp_dir}/{remote_qcow2_filename}"
 
         try:
+            # 1. SETUP
             print(f"Preparing temporary workspace on CVM...")
             setup_cmd = f"mkdir -p {remote_temp_dir} && df -mP {remote_temp_dir} | awk 'NR==2 {{print $4}}'"
             output, error, status = self._run_remote_command(setup_cmd)
@@ -278,12 +276,24 @@ class NutanixExporter:
             except ValueError:
                 pass 
 
+            # 2. DISCOVERY (ACLI)
             print("Discovering vdisk path via CVM...")
             acli_cmd = f"/usr/local/nutanix/bin/acli -o json vm.get '{vm_name}' include_vmdisk_paths=1"
             acli_output, acli_error, acli_status = self._run_remote_command(acli_cmd)
 
             if acli_status != 0:
                 raise Exception(f"'acli' failed: {acli_error or acli_output}")
+
+            # --- Save ACLI Layout ---
+            acli_json_path = os.path.join(output_dir, f"{vm_name.replace(' ', '_')}_acli_layout.json")
+            if not os.path.exists(acli_json_path):
+                try:
+                    parsed_acli = json.loads(acli_output)
+                    with open(acli_json_path, 'w') as f:
+                        json.dump(parsed_acli, f, indent=2)
+                    print(f"Saved Nutanix ACLI disk layout to: {acli_json_path}")
+                except Exception as e:
+                    print(f"Warning: Failed to save ACLI layout: {e}")
 
             try:
                 vm_data = json.loads(acli_output)
@@ -309,6 +319,7 @@ class NutanixExporter:
             except json.JSONDecodeError:
                 raise Exception("Failed to parse acli JSON output.")
 
+            # 3. CONVERSION
             convert_cmd = f"/usr/local/nutanix/bin/qemu-img convert -p -S 4k -O qcow2 '{source_vdisk_nfs_url}' {remote_qcow2_path}"
             print(f"Converting disk (this may take time)...")
             _, convert_error, convert_status = self._run_remote_command(convert_cmd)
@@ -316,6 +327,7 @@ class NutanixExporter:
             if convert_status != 0:
                 raise Exception(f"Conversion failed: {convert_error}")
 
+            # 4. DOWNLOAD
             local_qcow2_filename = f"{vm_name.replace(' ', '_')}_{disk_uuid}.qcow2"
             local_qcow2_path = os.path.join(output_dir, local_qcow2_filename)
             
@@ -330,11 +342,9 @@ class NutanixExporter:
         finally:
             # 5. CLEANUP with Retry=True
             try:
-                # We enable retry here in case the connection dropped during SCP
-                print("Cleaning up remote temporary files...")
                 self._run_remote_command(f"rm -rf {remote_temp_dir}", retry=True)
-            except Exception as cleanup_err:
-                print(f"Warning: Failed to clean up '{remote_temp_dir}' on CVM: {cleanup_err}")
+            except:
+                pass
 
     def generate_and_save_qemu_script(self, vm_details, disk_files, output_dir):
         print("\nGenerating QEMU launch script...")
@@ -523,7 +533,7 @@ def main():
         print("No export action specified (--export-def, --export-xml, --export-all). Nothing to do.")
         sys.exit(0)
 
-    # --- Pass output_dir here to trigger JSON dump ---
+    # Pass output_dir here to trigger JSON dump
     vm_details = exporter.get_vm_details(args.vm_name, save_raw_json_to=args.output_dir)
     if not vm_details:
         sys.exit(1)
@@ -574,3 +584,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
