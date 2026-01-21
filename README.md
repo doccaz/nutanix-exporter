@@ -36,6 +36,11 @@ If running this as a nested VM (e.g., inside ESXi or KVM), you must configure th
 * The environment is a modified Rocky Linux distribution.
 * Expect Python script errors on screen during installation.
 * There are limited progress indicators. Be patient.
+
+![installation settings](nutanix-ahv-install-2.png)
+
+* After the reboot, please wait for the CVM VM to be instantiated, and 15-20min for the storage setup to finish.
+
 * To check if the system was configured properly, run "genesis status" and "cluster status". If the commands do not exist, the installation has failed to complete!
 * The CVM VM can be checked with "virsh list". Its console is available at /var/log/NTNX.serial.0. Check it to troubleshoot potential memory issues.
 
@@ -45,6 +50,8 @@ nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
 ```
 
 Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
+
+* The Prism WebUI should be available at https://<CVM IP>:9044. The user is "admin" and the password is "nutanix/4u". Have your Community Portal credentials ready, you'll be asked for them (!).
 
 
 ---
@@ -166,8 +173,6 @@ After significant troubleshooting, the following internal behaviors were discove
 ```
 # allssh 'sudo faillock --user admin --reset'
 ```
-
-
 
 ### Internal Component Names (Greek/Sci-Fi Theme)
 
