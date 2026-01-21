@@ -145,6 +145,20 @@ After significant troubleshooting, the following internal behaviors were discove
 2. **Internal NFS:** Revealed via `acli` commands or logs. Restricted permissions (mostly Root only).
 
 
+### Useful commands
+
+* **To reset the admin password:**:
+```
+# allssh 'sudo faillock --user admin --reset'
+```
+
+* **To create a single node cluster:**:
+```
+nutanix@cvm$ cluster -s cvm_ip --redundancy_factor=1 create
+```
+
+Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Community-Edition-Getting-Started-v2_1:top-cluster-config-ce-t.html
+
 
 ### Internal Component Names (Greek/Sci-Fi Theme)
 
