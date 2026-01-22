@@ -103,8 +103,8 @@ Reference: https://portal.nutanix.com/page/documents/details?targetId=Nutanix-Co
 
 * Once the CVM + cluster is up, you must log to the Prism WebUI at https://<CVM IP>:9044. The user is "admin" and the password is "nutanix/4u". You'll be asked to create a new password.
 
-!(nutanix-ahv-install-3.png)
-!(nutanix-ahv-install-4.png)
+![main login](nutanix-ahv-install-3.png)
+![password change dialog](nutanix-ahv-install-4.png)
 
 Have your NEXT Community Portal credentials ready, you'll be asked for them in the next step.
 
